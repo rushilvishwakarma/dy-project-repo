@@ -34,7 +34,7 @@ export function LandingHero() {
           Project Repository
         </span>
         <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">
-          Showcase and evaluate GitHub projects with Supabase-powered insights.
+          Showcase your Projects on DY Project Repository.
         </h1>
         <p className="max-w-2xl text-base text-muted-foreground sm:text-lg">
           Students import their repositories with one click. Teachers review curated portfolios ranked by GitHub signals and enriched with documentation, certificates, and more.
