@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { LandingHero } from "@/components/landing/landing-hero";
+import { OAuthHandler } from "@/components/auth/oauth-handler";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 export default async function Home() {
@@ -12,8 +13,11 @@ export default async function Home() {
   }
 
   return (
-    <main className="container mx-auto flex min-h-[calc(100vh-6rem)] flex-col items-center justify-center px-4">
-      <LandingHero />
-    </main>
+    <>
+      <OAuthHandler />
+      <main className="container mx-auto flex min-h-[calc(100vh-6rem)] flex-col items-center justify-center px-4">
+        <LandingHero />
+      </main>
+    </>
   );
 }

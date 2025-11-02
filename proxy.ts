@@ -31,8 +31,39 @@ export async function proxy(request: NextRequest) {
   // supabase.auth.getUser(). A simple mistake could make it very hard to debug
   // issues with users being randomly logged out.
 
-  // Refresh the auth token
-  await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  const isAuthCallback = request.nextUrl.pathname === "/auth/callback";
+  const isAuthError = request.nextUrl.pathname === "/auth/error";
+  const isPublicRoute = 
+    request.nextUrl.pathname === "/" ||
+    request.nextUrl.pathname === "/callback" ||
+    request.nextUrl.pathname.startsWith("/api/auth/login") ||
+    isAuthCallback ||
+    isAuthError;
+
+  // Allow auth callback and error pages without authentication
+  if (isAuthCallback || isAuthError) {
+    return supabaseResponse;
+  }
+
+  // If user is not signed in and the current path is not a public route, redirect to home
+  if (!user && !isPublicRoute) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/";
+    return NextResponse.redirect(url);
+  }
+
+  // If user is signed in and trying to access home, redirect to dashboard
+  // BUT: Skip this redirect if there's a hash fragment (OAuth tokens in URL)
+  const hasHashFragment = request.nextUrl.hash && request.nextUrl.hash.includes("access_token");
+  if (user && request.nextUrl.pathname === "/" && !hasHashFragment) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/dashboard";
+    return NextResponse.redirect(url);
+  }
 
   return supabaseResponse;
 }
