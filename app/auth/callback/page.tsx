@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 
 export default function AuthCallbackPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [status, setStatus] = useState<"loading" | "success" | "error">("loading");
   const [errorMessage, setErrorMessage] = useState<string>("");
 
@@ -14,8 +15,65 @@ export default function AuthCallbackPage() {
     const handleCallback = async () => {
       try {
         const supabase = createClient();
+
+        // Check for error in query params first
+        const error = searchParams.get("error");
+        const errorDescription = searchParams.get("error_description");
+
+        if (error) {
+          setErrorMessage(errorDescription || error);
+          setStatus("error");
+          return;
+        }
+
+        // Check for auth code in query params (PKCE flow)
+        const code = searchParams.get("code");
         
-        // Check if we have hash parameters (implicit flow)
+        if (code) {
+          // Exchange the code for a session
+          const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+
+          if (exchangeError) {
+            console.error("Error exchanging code for session:", exchangeError);
+            setErrorMessage(exchangeError.message);
+            setStatus("error");
+            return;
+          }
+
+          if (!data.session) {
+            setErrorMessage("No session returned after code exchange");
+            setStatus("error");
+            return;
+          }
+
+          // Store the GitHub provider token if available
+          const providerToken = data.session.provider_token;
+          if (providerToken) {
+            try {
+              const response = await fetch("/api/auth/store-github-token", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${data.session.access_token}`,
+                },
+                body: JSON.stringify({ provider_token: providerToken }),
+              });
+
+              if (!response.ok) {
+                console.error("Failed to store GitHub token");
+              }
+            } catch (err) {
+              console.error("Error storing GitHub token:", err);
+            }
+          }
+
+          setStatus("success");
+          // Redirect to dashboard after successful authentication
+          router.push("/dashboard");
+          return;
+        }
+
+        // Check if we have hash parameters (implicit flow - fallback)
         const hashParams = new URLSearchParams(window.location.hash.substring(1));
         const accessToken = hashParams.get("access_token");
         const refreshToken = hashParams.get("refresh_token");
@@ -23,14 +81,14 @@ export default function AuthCallbackPage() {
         
         if (accessToken && refreshToken) {
           // Set the session with the tokens from the hash
-          const { error } = await supabase.auth.setSession({
+          const { error: sessionError } = await supabase.auth.setSession({
             access_token: accessToken,
             refresh_token: refreshToken,
           });
 
-          if (error) {
-            console.error("Error setting session:", error);
-            setErrorMessage(error.message);
+          if (sessionError) {
+            console.error("Error setting session:", sessionError);
+            setErrorMessage(sessionError.message);
             setStatus("error");
             return;
           }
@@ -61,19 +119,8 @@ export default function AuthCallbackPage() {
           return;
         }
 
-        // If no hash params, check for error in query params
-        const searchParams = new URLSearchParams(window.location.search);
-        const error = searchParams.get("error");
-        const errorDescription = searchParams.get("error_description");
-
-        if (error) {
-          setErrorMessage(errorDescription || error);
-          setStatus("error");
-          return;
-        }
-
         // No tokens or error found
-        setErrorMessage("No authentication tokens found");
+        setErrorMessage("No authentication code or tokens found in callback");
         setStatus("error");
       } catch (err) {
         console.error("Callback error:", err);
@@ -83,7 +130,7 @@ export default function AuthCallbackPage() {
     };
 
     handleCallback();
-  }, [router]);
+  }, [router, searchParams]);
 
   if (status === "loading") {
     return (
