@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, useEffect, useMemo, useState } from "react";
+import { Eye, GitFork, Star } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -14,10 +15,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
 
 const metadataSchema = z.object({
   notes: z.string().max(10_000).optional().nullable(),
@@ -74,6 +75,7 @@ export function ProjectDetailShell({ projectId, profile }: ProjectDetailShellPro
       tags: projectQuery.data?.tags ?? [],
     },
   });
+
 
   useEffect(() => {
     if (projectQuery.data) {
@@ -140,7 +142,7 @@ export function ProjectDetailShell({ projectId, profile }: ProjectDetailShellPro
   };
 
   const handleRemoveTag = (tag: string) => {
-  const filtered = (form.getValues("tags") ?? []).filter((item: string) => item !== tag);
+    const filtered = (form.getValues("tags") ?? []).filter((item: string) => item !== tag);
     form.setValue("tags", filtered);
   };
 
@@ -151,7 +153,7 @@ export function ProjectDetailShell({ projectId, profile }: ProjectDetailShellPro
     });
   };
 
-  const onFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const onFileSelect = (event: ChangeEvent<HTMLInputElement>) => {
     if (!event.target.files?.length) return;
     const files = Array.from(event.target.files);
     uploadAttachmentsMutation.mutate(files);
@@ -190,10 +192,19 @@ export function ProjectDetailShell({ projectId, profile }: ProjectDetailShellPro
           {project.language && <Badge variant="outline">{project.language}</Badge>}
         </div>
         <p className="max-w-3xl text-base text-muted-foreground">{project.description}</p>
-        <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-          <span>⭐ {project.stars ?? 0}</span>
-          <span>🍴 {project.forks ?? 0}</span>
-          <span>👀 {project.watchers ?? 0}</span>
+        <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
+          <span className="flex items-center gap-1">
+            <Star className="h-4 w-4" aria-hidden />
+            {project.stars ?? 0}
+          </span>
+          <span className="flex items-center gap-1">
+            <GitFork className="h-4 w-4" aria-hidden />
+            {project.forks ?? 0}
+          </span>
+          <span className="flex items-center gap-1">
+            <Eye className="h-4 w-4" aria-hidden />
+            {project.watchers ?? 0}
+          </span>
           <span>Visibility: {project.private ? "Private" : "Public"}</span>
         </div>
         <div className="flex items-center gap-3">
@@ -217,13 +228,13 @@ export function ProjectDetailShell({ projectId, profile }: ProjectDetailShellPro
           <CardContent>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
               <div className="grid gap-2">
-                <Label htmlFor="notes">Notes</Label>
+                <Label htmlFor="notes">Project notes</Label>
                 <Textarea
                   id="notes"
                   placeholder="Add highlights, feedback, or review notes"
                   {...form.register("notes")}
                   disabled={!canEdit || updateMetadataMutation.isPending}
-                  rows={5}
+                  rows={6}
                 />
               </div>
               <div className="grid gap-2">
@@ -293,8 +304,10 @@ export function ProjectDetailShell({ projectId, profile }: ProjectDetailShellPro
 
         <Card>
           <CardHeader>
-            <CardTitle>Attachments</CardTitle>
-            <CardDescription>Upload supporting documents or certificates.</CardDescription>
+            <CardTitle>Attachments & Certificates</CardTitle>
+            <CardDescription>
+              Centralize supplemental evidence, certificates, or architecture diagrams for expert review.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {canEdit && (
@@ -358,7 +371,7 @@ export function ProjectDetailShell({ projectId, profile }: ProjectDetailShellPro
                   </TableBody>
                 </Table>
               ) : (
-                <p className="text-sm text-muted-foreground">No attachments uploaded yet.</p>
+                <p className="text-sm text-muted-foreground">No attachments or certificates uploaded yet.</p>
               )}
             </div>
           </CardContent>

@@ -51,11 +51,6 @@ export function LandingHero() {
             "Continue with GitHub"
           )}
         </Button>
-        <Button asChild variant="outline">
-          <a href="https://context7.com/websites/ui_shadcn/llms.txt" target="_blank" rel="noreferrer">
-            View UI Guidelines
-          </a>
-        </Button>
       </div>
     </section>
   );

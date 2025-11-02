@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { assertSupabaseUser } from "@/lib/auth";
 import { standardResponse } from "@/lib/response";
 import { adminClient } from "@/lib/supabase/admin";
 import { getProfileByUserId } from "@/lib/profiles";
+
+const updateSchema = z.object({
+  content: z.unknown().optional(),
+  content_text: z.string().max(20000).optional().nullable(),
+});
 
 async function ensureAccess(projectId: string, userId: string) {
   const profile = await getProfileByUserId(userId);
@@ -14,7 +20,7 @@ async function ensureAccess(projectId: string, userId: string) {
 
   if (error) throw new Error(error.message);
   if (!data) {
-    return { project: null, profile } as const;
+    return { project: null, profile, isOwner: false, isExpert: profile?.role === "expert" } as const;
   }
 
   const isOwner = data.user_id === userId;
@@ -23,7 +29,18 @@ async function ensureAccess(projectId: string, userId: string) {
     throw Object.assign(new Error("Not authorized"), { status: 403 });
   }
 
-  return { project: data, profile } as const;
+  return { project: data, profile, isOwner, isExpert } as const;
+}
+
+function isTableMissing(error: { message?: string | null; code?: string | null } | null | undefined) {
+  if (!error) return false;
+  const normalizedMessage = (error.message ?? "").toLowerCase();
+  return (
+    error.code === "PGRST116" ||
+    error.code === "PGRST101" ||
+    normalizedMessage.includes("could not find the table") ||
+    normalizedMessage.includes("relationship 'project_documentation'")
+  );
 }
 
 export async function GET(
@@ -34,6 +51,7 @@ export async function GET(
     const { id } = await params;
     const user = await assertSupabaseUser(request);
     const { project } = await ensureAccess(id, user.id);
+
     if (!project) {
       return NextResponse.json(
         standardResponse(false, undefined, 404, "Project not found"),
@@ -42,14 +60,19 @@ export async function GET(
     }
 
     const { data, error } = await adminClient
-      .from("project_documents")
-      .select("id, file_name, file_url, content_type, size, created_at")
+      .from("project_documentation")
+      .select("project_id, content, content_text, updated_at, updated_by")
       .eq("project_id", id)
-      .order("created_at", { ascending: false });
+      .maybeSingle();
 
-    if (error) throw new Error(error.message);
+    if (error) {
+      if (isTableMissing(error)) {
+        return NextResponse.json(standardResponse(true, null, 200));
+      }
+      throw new Error(error.message);
+    }
 
-    return NextResponse.json(standardResponse(true, data ?? [], 200));
+    return NextResponse.json(standardResponse(true, data ?? null, 200));
   } catch (error) {
     const status =
       error instanceof Error && "status" in error && typeof (error as { status: unknown }).status === "number"
@@ -62,14 +85,15 @@ export async function GET(
   }
 }
 
-export async function POST(
+export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;
     const user = await assertSupabaseUser(request);
-    const { project } = await ensureAccess(id, user.id);
+    const { project, isOwner } = await ensureAccess(id, user.id);
+
     if (!project) {
       return NextResponse.json(
         standardResponse(false, undefined, 404, "Project not found"),
@@ -77,62 +101,41 @@ export async function POST(
       );
     }
 
-    const formData = await request.formData();
-    const files = formData.getAll("files").filter((item): item is File => item instanceof File);
-
-    if (files.length === 0) {
+    if (!isOwner) {
       return NextResponse.json(
-        standardResponse(false, undefined, 400, "No files provided"),
-        { status: 400 }
+        standardResponse(false, undefined, 403, "Only project owners can update documentation"),
+        { status: 403 }
       );
     }
 
-    const bucket = adminClient.storage.from("project_documents");
-    const uploads = [];
+    const payload = updateSchema.parse(await request.json());
 
-    for (const file of files) {
-      const arrayBuffer = await file.arrayBuffer();
-      const filePath = `${project.user_id}/${id}/${Date.now()}-${file.name}`;
-
-      const { data: uploadData, error: uploadError } = await bucket.upload(
-        filePath,
-        arrayBuffer,
+    const { data, error } = await adminClient
+      .from("project_documentation")
+      .upsert(
         {
-          contentType: file.type,
-          upsert: true,
-        }
-      );
-
-      if (uploadError) {
-        throw new Error(uploadError.message);
-      }
-
-      const { data: publicData } = bucket.getPublicUrl(filePath);
-      const fileUrl = publicData?.publicUrl;
-
-      const { data: docRecord, error: docError } = await adminClient
-        .from("project_documents")
-        .insert({
           project_id: id,
-          file_name: file.name,
-          file_path: uploadData?.path ?? filePath,
-          file_url: fileUrl,
-          content_type: file.type,
-          size: file.size,
-        })
-        .select("*")
-        .single();
+          content: payload.content ?? null,
+          content_text: payload.content_text ?? null,
+          updated_at: new Date().toISOString(),
+          updated_by: user.id,
+        },
+        { onConflict: "project_id" }
+      )
+      .select("project_id, content, content_text, updated_at, updated_by")
+      .maybeSingle();
 
-      if (docError) {
-        throw new Error(docError.message);
+    if (error) {
+      if (isTableMissing(error)) {
+        return NextResponse.json(
+          standardResponse(false, undefined, 503, "Project documentation storage is not configured. Please run the associated migration."),
+          { status: 503 }
+        );
       }
-
-      uploads.push(docRecord);
+      throw new Error(error.message);
     }
 
-    return NextResponse.json(standardResponse(true, uploads, 201), {
-      status: 201,
-    });
+    return NextResponse.json(standardResponse(true, data ?? null, 200));
   } catch (error) {
     const status =
       error instanceof Error && "status" in error && typeof (error as { status: unknown }).status === "number"

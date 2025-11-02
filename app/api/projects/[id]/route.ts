@@ -13,9 +13,10 @@ const updateSchema = z.object({
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const user = await assertSupabaseUser(request);
     const profile = await getProfileByUserId(user.id);
 
@@ -24,7 +25,7 @@ export async function GET(
     const { data, error } = await adminClient
       .from("projects")
       .select("*, documents:project_documents(id, file_name, file_url, content_type, created_at)")
-      .eq("id", params.id)
+      .eq("id", id)
       .maybeSingle<ProjectWithDocuments>();
 
     if (error) throw new Error(error.message);
@@ -59,9 +60,10 @@ export async function GET(
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const user = await assertSupabaseUser(request);
     const profile = await getProfileByUserId(user.id);
     const payload = updateSchema.parse(await request.json());
@@ -69,7 +71,7 @@ export async function PATCH(
     const { data, error } = await adminClient
       .from("projects")
       .select("user_id")
-      .eq("id", params.id)
+      .eq("id", id)
       .maybeSingle<{ user_id: string }>();
 
     if (error) throw new Error(error.message);
@@ -99,7 +101,7 @@ export async function PATCH(
     const { data: updated, error: updateError } = await adminClient
       .from("projects")
       .update(updatePayload)
-      .eq("id", params.id)
+      .eq("id", id)
       .select("*")
       .maybeSingle<Record<string, unknown>>();
 

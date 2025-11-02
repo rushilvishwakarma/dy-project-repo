@@ -63,6 +63,15 @@ export type ProjectDocument = {
   created_at?: string | null;
 };
 
+export type ProjectDocumentation = {
+  project_id: string;
+  content?: unknown;
+  content_text?: string | null;
+  updated_at?: string | null;
+  updated_by?: string | null;
+  updated_by_profile?: Profile | null;
+};
+
 export type Project = {
   id: string;
   user_id: string;

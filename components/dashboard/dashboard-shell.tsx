@@ -1,13 +1,23 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
-import Link from "next/link";
+import { type ComponentType, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import {
+  FolderGit2,
+  GitCompare,
+  GitFork,
+  LineChart,
+  Loader2,
+  LogOut,
+  RefreshCw,
+  Search as SearchIcon,
+  Star,
+  Eye,
+} from "lucide-react";
 import { useAuthorizedFetch } from "@/hooks/use-authorized-fetch";
 import { parseStandardResponse } from "@/lib/api-client";
 import {
-  GithubActivityItem,
   GithubContributionSummary,
   GithubRepo,
   GithubUser,
@@ -17,12 +27,15 @@ import {
 } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Input } from "@/components/ui/input";
+import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
+import { ContributionGraph } from "@/components/contribution-graph";
+import { ProjectDocumentationSheet } from "@/components/projects/project-documentation-sheet";
 import { cn } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 
 interface DashboardShellProps {
   profile: Profile | null;
@@ -31,6 +44,10 @@ interface DashboardShellProps {
 export function DashboardShell({ profile }: DashboardShellProps) {
   const authorizedFetch = useAuthorizedFetch();
   const queryClient = useQueryClient();
+  const supabase = useMemo(() => createClient(), []);
+  const [signingOut, setSigningOut] = useState(false);
+  const [switchingAccount, setSwitchingAccount] = useState(false);
+  const [repoSearch, setRepoSearch] = useState("");
 
   const githubUserQuery = useQuery<GithubUser>({
     queryKey: ["github-user"],
@@ -53,14 +70,6 @@ export function DashboardShell({ profile }: DashboardShellProps) {
     queryFn: async () => {
       const response = await authorizedFetch("/api/github/repos");
       return parseStandardResponse<GithubRepo[]>(response);
-    },
-  });
-
-  const activityQuery = useQuery<GithubActivityItem[]>({
-    queryKey: ["github-activity"],
-    queryFn: async () => {
-      const response = await authorizedFetch("/api/github/activity");
-      return parseStandardResponse<GithubActivityItem[]>(response);
     },
   });
 
@@ -88,6 +97,100 @@ export function DashboardShell({ profile }: DashboardShellProps) {
     }
   }, [profile?.role, queryClient]);
 
+  const totalImportedProjects = projectsQuery.data?.length ?? 0;
+  const totalAvailableRepos = reposQuery.data?.length ?? 0;
+  const totalContributions = contributionsQuery.data?.total_contributions ?? null;
+  const expertGroups = expertProjectsQuery.data ?? [];
+  const reviewProjects = expertGroups.reduce((accumulator, group) => accumulator + group.projects.length, 0);
+  const contributionsDisplay = totalContributions !== null ? totalContributions.toLocaleString() : "--";
+  const contributionGraphData = useMemo(() => {
+    const contributionDays = contributionsQuery.data?.contributions ?? [];
+    if (!contributionDays.length) {
+      return [];
+    }
+
+    const counts = contributionDays.map((day) => day.count);
+    const maxCount = Math.max(...counts);
+    if (maxCount === 0) {
+      return contributionDays.map((day) => ({ date: day.date, count: day.count, level: 0 }));
+    }
+
+    const quartile = maxCount / 4;
+
+    const mapLevel = (count: number) => {
+      if (count === 0) return 0;
+      if (count <= quartile) return 1;
+      if (count <= quartile * 2) return 2;
+      if (count <= quartile * 3) return 3;
+      return 4;
+    };
+
+    return contributionDays.map((day) => ({
+      date: day.date,
+      count: day.count,
+      level: mapLevel(day.count),
+    }));
+  }, [contributionsQuery.data?.contributions]);
+  const contributionYear = contributionGraphData.length
+    ? new Date(contributionGraphData[contributionGraphData.length - 1].date).getFullYear()
+    : new Date().getFullYear();
+  const reposToDisplay = useMemo(() => {
+    const repos = reposQuery.data ?? [];
+    if (!repos.length) return [];
+    const normalized = repoSearch.trim().toLowerCase();
+    const filtered = normalized
+      ? repos.filter((repo) => {
+          const repoName = repo.name?.toLowerCase() ?? "";
+          const repoDescription = repo.description?.toLowerCase() ?? "";
+          const repoOwner = typeof repo.owner === "string" ? repo.owner.toLowerCase() : "";
+          return (
+            repoName.includes(normalized) ||
+            repoDescription.includes(normalized) ||
+            repoOwner.includes(normalized)
+          );
+        })
+      : repos;
+    const sorted = [...filtered].sort((a, b) => {
+      const aDate = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+      const bDate = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+      return bDate - aDate;
+    });
+    return sorted.slice(0, 5);
+  }, [reposQuery.data, repoSearch]);
+
+  const handleSignOut = async () => {
+    setSigningOut(true);
+    try {
+      await supabase.auth.signOut();
+      queryClient.clear();
+      window.location.href = "/";
+    } catch (error) {
+      toast.error((error as Error).message ?? "Unable to sign out");
+    } finally {
+      setSigningOut(false);
+    }
+  };
+
+  const handleSwitchAccount = async () => {
+    setSwitchingAccount(true);
+    try {
+      await supabase.auth.signOut();
+      queryClient.clear();
+      const response = await fetch("/api/auth/login");
+      if (!response.ok) {
+        throw new Error("Failed to start GitHub login");
+      }
+      const payload = await response.json();
+      if (!payload?.success || !payload?.data?.auth_url) {
+        throw new Error(payload?.error ?? "Unexpected login response");
+      }
+      window.location.href = payload.data.auth_url as string;
+    } catch (error) {
+      toast.error((error as Error).message ?? "Unable to switch account");
+      setSwitchingAccount(false);
+    }
+  };
+
   const importProjectMutation = useMutation<Project, Error, string>({
     mutationFn: async (fullName: string) => {
       const response = await authorizedFetch("/api/projects", {
@@ -101,8 +204,8 @@ export function DashboardShell({ profile }: DashboardShellProps) {
       queryClient.invalidateQueries({ queryKey: ["projects", "developer"] });
       queryClient.invalidateQueries({ queryKey: ["projects", "expert"] });
     },
-    onError: (error: unknown) => {
-      toast.error((error as Error).message);
+    onError: (err: unknown) => {
+      toast.error((err as Error).message);
     },
   });
 
@@ -111,297 +214,415 @@ export function DashboardShell({ profile }: DashboardShellProps) {
     return new Set(projects.map((project: Project) => project.github_repo_id));
   }, [projectsQuery.data]);
 
+
   return (
-    <div className="space-y-10">
-      <header className="flex flex-col gap-4 rounded-lg border border-border bg-card p-6 shadow-sm md:flex-row md:items-center md:justify-between">
-        <div className="flex items-center gap-4">
-          {githubUserQuery.isLoading ? (
-            <Skeleton className="h-16 w-16 rounded-full" />
-          ) : (
-            <Avatar className="h-16 w-16">
-              <AvatarImage src={githubUserQuery.data?.avatar_url ?? undefined} alt={githubUserQuery.data?.username} />
-              <AvatarFallback>{githubUserQuery.data?.username?.slice(0, 2).toUpperCase()}</AvatarFallback>
-            </Avatar>
-          )}
-          <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-semibold">
-                {githubUserQuery.data?.username ?? "GitHub User"}
-              </h1>
-              <Badge variant="secondary">{profile?.role ?? "developer"}</Badge>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              {githubUserQuery.data?.html_url ? (
-                <a
-                  href={githubUserQuery.data.html_url}
-                  className="text-primary underline-offset-4 hover:underline"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {githubUserQuery.data.html_url}
-                </a>
+    <div className="space-y-12">
+      <section className="rounded-3xl border border-border/60 bg-card/60 p-8">
+        <div className="flex flex-col gap-8">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-4">
+              {githubUserQuery.isLoading ? (
+                <Skeleton className="h-16 w-16 rounded-full" />
               ) : (
-                "Connect GitHub to start importing projects"
+                <Avatar className="h-16 w-16">
+                  <AvatarImage src={githubUserQuery.data?.avatar_url ?? undefined} alt={githubUserQuery.data?.username} />
+                  <AvatarFallback>{githubUserQuery.data?.username?.slice(0, 2).toUpperCase()}</AvatarFallback>
+                </Avatar>
               )}
-            </p>
-          </div>
-        </div>
-        <div className="flex flex-col items-start gap-2 md:items-end">
-          <p className="text-sm text-muted-foreground">
-            Total contributions last year
-          </p>
-          <p className="text-2xl font-semibold">
-            {contributionsQuery.data?.total_contributions ?? "--"}
-          </p>
-        </div>
-      </header>
-
-      <Tabs defaultValue={profile?.role === "expert" ? "expert" : "developer"} className="w-full">
-        <TabsList>
-          <TabsTrigger value="developer">Developer View</TabsTrigger>
-          <TabsTrigger value="expert" disabled={profile?.role !== "expert"}>
-            Expert View
-          </TabsTrigger>
-        </TabsList>
-        <TabsContent value="developer" className="space-y-8">
-          <section className="grid gap-6 lg:grid-cols-3">
-            <Card className="lg:col-span-2">
-              <CardHeader>
-                <CardTitle>Imported Projects</CardTitle>
-                <CardDescription>Your curated list synced from GitHub</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {projectsQuery.isLoading ? (
-                  <div className="space-y-3">
-                    <Skeleton className="h-16 w-full" />
-                    <Skeleton className="h-16 w-full" />
-                  </div>
-                ) : projectsQuery.data?.length ? (
-                  <div className="space-y-4">
-                    {projectsQuery.data.map((project: Project) => (
-                      <ProjectCard key={project.id} project={project} />
-                    ))}
-                  </div>
-                ) : (
-                  <EmptyState
-                    title="No projects imported yet"
-                    description="Select a repository from your GitHub list to import."
-                  />
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Recent Activity</CardTitle>
-                <CardDescription>Last 10 GitHub events</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {activityQuery.isLoading ? (
-                  <Skeleton className="h-20 w-full" />
-                ) : activityQuery.data?.length ? (
-                  <ul className="space-y-2 text-sm">
-                    {activityQuery.data.map((event: GithubActivityItem) => (
-                      <li key={event.id} className="rounded-md border border-border p-3">
-                        <p className="font-medium">{event.type ?? "Event"}</p>
-                        <p className="text-muted-foreground">{event.repo ?? "Repository"}</p>
-                        {event.created_at && (
-                          <p className="text-xs text-muted-foreground">
-                            {new Date(event.created_at).toLocaleString()}
-                          </p>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="text-sm text-muted-foreground">No activity found.</p>
-                )}
-              </CardContent>
-            </Card>
-          </section>
-
-          <section className="space-y-4">
-            <header className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold">GitHub Repositories</h2>
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-3">
+                  <h1 className="text-2xl font-semibold tracking-tight">
+                    {githubUserQuery.data?.username ?? "GitHub User"}
+                  </h1>
+                  <Badge variant="secondary" className="uppercase">
+                    {profile?.role ?? "developer"}
+                  </Badge>
+                </div>
                 <p className="text-sm text-muted-foreground">
-                  Import projects to share with experts. Private repos stay private but metadata is stored securely.
+                  {githubUserQuery.data?.html_url ? (
+                    <a
+                      href={githubUserQuery.data.html_url}
+                      className="inline-flex items-center gap-1 text-primary underline-offset-4 hover:underline"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {githubUserQuery.data.html_url}
+                    </a>
+                  ) : (
+                    "Connect GitHub to start importing projects."
+                  )}
                 </p>
               </div>
-            </header>
-            <Card>
-              <CardContent className="p-0">
-                {reposQuery.isLoading ? (
-                  <div className="space-y-3 p-6">
-                    <Skeleton className="h-10 w-full" />
-                    <Skeleton className="h-10 w-full" />
-                    <Skeleton className="h-10 w-full" />
-                  </div>
-                ) : reposQuery.data?.length ? (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Repository</TableHead>
-                        <TableHead className="hidden lg:table-cell">Stars</TableHead>
-                        <TableHead className="hidden lg:table-cell">Forks</TableHead>
-                        <TableHead className="hidden lg:table-cell">Updated</TableHead>
-                        <TableHead className="w-[140px]">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {reposQuery.data.map((repo: GithubRepo) => {
-                        const alreadyImported = importedRepoIds.has(repo.id);
-                        const repoFullName = repo.owner ? `${repo.owner}/${repo.name}` : repo.name;
-                        return (
-                          <TableRow key={repo.id}>
-                            <TableCell>
-                              <div className="space-y-1">
-                                <p className="font-medium">{repo.name}</p>
-                                {repo.description && (
-                                  <p className="text-sm text-muted-foreground line-clamp-2">
-                                    {repo.description}
-                                  </p>
-                                )}
-                              </div>
-                            </TableCell>
-                            <TableCell className="hidden lg:table-cell">{repo.stargazers_count}</TableCell>
-                            <TableCell className="hidden lg:table-cell">{repo.forks_count}</TableCell>
-                            <TableCell className="hidden lg:table-cell">
-                              {repo.updated_at ? new Date(repo.updated_at).toLocaleDateString() : "--"}
-                            </TableCell>
-                            <TableCell>
-                              <Button
-                                size="sm"
-                                variant={alreadyImported ? "secondary" : "default"}
-                                disabled={importProjectMutation.isPending || alreadyImported}
-                                onClick={() => importProjectMutation.mutate(repoFullName)}
-                              >
-                                {alreadyImported ? "Imported" : "Import"}
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <AnimatedThemeToggler className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-border/60 bg-background/80 transition hover:border-primary/60" />
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleSwitchAccount}
+                disabled={switchingAccount || signingOut}
+              >
+                {switchingAccount ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Redirecting
+                  </span>
                 ) : (
-                  <div className="flex flex-col items-center justify-center p-8 space-y-4">
-                    <EmptyState
-                      title="No repositories found"
-                      description="We could not retrieve your repositories. Make sure GitHub access is granted."
-                    />
-                    <Button
-                      onClick={async () => {
-                        try {
-                          const response = await fetch("/api/auth/login");
-                          const data = await response.json();
-                          if (data.success && data.data.auth_url) {
-                            window.location.href = data.data.auth_url;
-                          }
-                        } catch (error) {
-                          toast.error("Failed to initiate GitHub authorization");
-                        }
-                      }}
-                    >
-                      Grant GitHub Access
+                  "Switch GitHub Account"
+                )}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleSignOut}
+                disabled={signingOut || switchingAccount}
+              >
+                {signingOut ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <span className="flex items-center gap-2">
+                    <LogOut className="h-4 w-4" />
+                    Sign out
+                  </span>
+                )}
+              </Button>
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <StatTile
+              icon={FolderGit2}
+              title="Imported projects"
+              description="Synced from GitHub"
+              value={totalImportedProjects.toLocaleString()}
+              loading={projectsQuery.isLoading}
+            />
+            <StatTile
+              icon={GitCompare}
+              title={profile?.role === "expert" ? "Developers to review" : "Tracked repositories"}
+              description={profile?.role === "expert" ? "Awaiting feedback" : "Available to import"}
+              value={
+                profile?.role === "expert"
+                  ? reviewProjects.toLocaleString()
+                  : totalAvailableRepos.toLocaleString()
+              }
+              loading={profile?.role === "expert" ? expertProjectsQuery.isLoading : reposQuery.isLoading}
+            />
+            <StatTile
+              icon={LineChart}
+              title="Yearly contributions"
+              description="Public activity"
+              value={contributionsDisplay}
+              loading={contributionsQuery.isLoading}
+            />
+          </div>
+
+          <div className="rounded-2xl border border-border/60 bg-background/70 p-4">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold">Contribution activity</p>
+                <p className="text-xs text-muted-foreground">Last 53 weeks of GitHub history</p>
+              </div>
+              <span className="text-xs uppercase tracking-wide text-muted-foreground">{contributionYear}</span>
+            </div>
+            {contributionsQuery.isLoading ? (
+              <Skeleton className="h-56 w-full rounded-xl" />
+            ) : contributionGraphData.length ? (
+              <ContributionGraph
+                data={contributionGraphData}
+                year={contributionYear}
+                showLegend
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                No contribution data yet.
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {profile?.role === "expert" && (
+        <section className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold">Expert review queue</h2>
+              <p className="text-sm text-muted-foreground">
+                Review developer submissions and leave actionable feedback.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => queryClient.invalidateQueries({ queryKey: ["projects", "expert"] })}
+              disabled={expertProjectsQuery.isFetching}
+            >
+              {expertProjectsQuery.isFetching ? (
+                <span className="flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Refreshing
+                </span>
+              ) : (
+                <span className="flex items-center gap-2">
+                  <RefreshCw className="h-4 w-4" />
+                  Refresh queue
+                </span>
+              )}
+            </Button>
+          </div>
+          <div className="rounded-2xl border border-border/60 bg-card/50 p-6">
+            {expertProjectsQuery.isLoading ? (
+              <Skeleton className="h-32 w-full" />
+            ) : expertGroups.length ? (
+              expertGroups.map((group: ExpertProjectGroup) => (
+                <div
+                  key={group.owner_id}
+                  className="space-y-4 rounded-xl border border-border/60 bg-background/90 p-4"
+                >
+                  <div className="flex items-center gap-3">
+                    <Avatar className="h-12 w-12">
+                      <AvatarImage
+                        src={group.owner?.avatar_url ?? undefined}
+                        alt={group.owner?.username ?? "Developer avatar"}
+                      />
+                      <AvatarFallback>
+                        {group.owner?.username?.slice(0, 2).toUpperCase() ?? "DV"}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="space-y-1">
+                      <p className="text-base font-semibold">
+                        {group.owner?.full_name ?? group.owner?.username ?? "Developer"}
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        {group.owner?.username ? `@${group.owner.username}` : "Unlinked profile"}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    {group.projects.map((project: Project) => (
+                      <ProjectCard key={project.id} project={project} compact profile={profile} />
+                    ))}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <EmptyState
+                title="No developer submissions yet"
+                description="Encourage developers to import their GitHub repositories to review them here."
+              />
+            )}
+          </div>
+        </section>
+      )}
+
+      <section className="grid gap-6 xl:grid-cols-[2fr,1fr]">
+        <Card className="h-full border border-border/60 bg-card/60 shadow-md">
+          <CardHeader className="space-y-1">
+            <CardTitle>Imported projects</CardTitle>
+            <CardDescription>Your curated list synced from GitHub.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {projectsQuery.isLoading ? (
+              <div className="space-y-3">
+                <Skeleton className="h-20 w-full" />
+                <Skeleton className="h-20 w-full" />
+                <Skeleton className="h-20 w-full" />
+              </div>
+            ) : totalImportedProjects ? (
+              projectsQuery.data?.map((project: Project) => (
+                <ProjectCard key={project.id} project={project} profile={profile} />
+              ))
+            ) : (
+              <EmptyState
+                title="No projects imported yet"
+                description="Select a repository from your GitHub list to import."
+              />
+            )}
+          </CardContent>
+        </Card>
+
+        <div className="space-y-6">
+          <Card className="border border-border/60 bg-card/60 shadow-md">
+            <CardHeader className="space-y-4">
+              <div className="space-y-1">
+                <CardTitle>GitHub repositories</CardTitle>
+                <CardDescription>Import projects to share with experts.</CardDescription>
+              </div>
+              <div className="space-y-2">
+                <div className="relative">
+                  <SearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="repo-search"
+                    placeholder="Search GitHub projects"
+                    className="pl-9"
+                    value={repoSearch}
+                    onChange={(event) => setRepoSearch(event.target.value)}
+                    disabled={reposQuery.isLoading || !totalAvailableRepos}
+                  />
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {reposQuery.isLoading ? (
+                <div className="flex min-h-[420px] flex-col justify-center gap-3">
+                  <Skeleton className="h-10 w-full" />
+                  <Skeleton className="h-10 w-full" />
+                  <Skeleton className="h-10 w-full" />
+                </div>
+              ) : reposQuery.data?.length ? (
+                reposToDisplay.length ? (
+                  <div className="space-y-3 min-h-[420px]">
+                    {reposToDisplay.map((repo: GithubRepo) => {
+                      const alreadyImported = importedRepoIds.has(repo.id);
+                      const repoFullName = repo.owner ? `${repo.owner}/${repo.name}` : repo.name;
+                      return (
+                        <div
+                          key={repo.id}
+                          className="flex min-h-[120px] flex-col justify-between rounded-xl border border-border/60 bg-background/90 p-4 transition-colors md:flex-row md:items-start md:justify-between"
+                        >
+                          <div className="space-y-2 md:max-w-[70%]">
+                            <div className="flex items-start gap-2">
+                              <p className="font-medium truncate" title={repo.name}>
+                                {repo.name}
+                              </p>
+                              {repo.owner && (
+                                <Badge variant="outline" className="max-w-[140px] truncate text-xs font-normal uppercase tracking-wide text-muted-foreground">
+                                  {repo.owner}
+                                </Badge>
+                              )}
+                            </div>
+                            {repo.description && (
+                              <p className="text-sm text-muted-foreground line-clamp-2">
+                                {repo.description}
+                              </p>
+                            )}
+                            <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                              <span className="flex items-center gap-1">
+                                <Star className="h-3.5 w-3.5" aria-hidden />
+                                {repo.stargazers_count ?? 0}
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <GitFork className="h-3.5 w-3.5" aria-hidden />
+                                {repo.forks_count ?? 0}
+                              </span>
+                              <span>
+                                Updated {repo.updated_at ? new Date(repo.updated_at).toLocaleDateString() : "--"}
+                              </span>
+                            </div>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={alreadyImported ? "secondary" : "default"}
+                            disabled={importProjectMutation.isPending || alreadyImported}
+                            onClick={() => importProjectMutation.mutate(repoFullName)}
+                          >
+                            {alreadyImported ? "Imported" : "Import"}
+                          </Button>
+                        </div>
+                      );
+                    })}
+                    <p className="text-xs text-muted-foreground">
+                      Showing {reposToDisplay.length} of {totalAvailableRepos} repositories
+                      {repoSearch ? " matching your search." : " sorted by most recently updated."}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="flex min-h-[420px] flex-col items-center gap-3 py-10 text-center">
+                    <p className="text-sm text-muted-foreground">
+                      No repositories match your search.
+                    </p>
+                    <Button size="sm" variant="outline" onClick={() => setRepoSearch("")}>
+                      Clear search
                     </Button>
                   </div>
-                )}
-              </CardContent>
-            </Card>
-          </section>
-        </TabsContent>
-
-        <TabsContent value="expert" className="space-y-8">
-          {profile?.role !== "expert" ? (
-            <EmptyState
-              title="Expert access required"
-              description="Upgrade the user's role in Supabase to review developers' portfolios."
-            />
-          ) : expertProjectsQuery.isLoading ? (
-            <Skeleton className="h-32 w-full" />
-          ) : expertProjectsQuery.data?.length ? (
-            <div className="space-y-6">
-              {expertProjectsQuery.data.map((group: ExpertProjectGroup) => (
-                <Card key={group.owner_id}>
-                  <CardHeader>
-                    <div className="flex items-center gap-3">
-                      <Avatar>
-                        <AvatarImage src={group.owner?.avatar_url ?? undefined} />
-                        <AvatarFallback>
-                          {group.owner?.username?.slice(0, 2).toUpperCase() ?? "DV"}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div>
-                        <CardTitle>{group.owner?.full_name ?? group.owner?.username ?? "Developer"}</CardTitle>
-                        <CardDescription>
-                          {group.owner?.username ? `@${group.owner.username}` : "Unlinked profile"}
-                        </CardDescription>
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    {group.projects.map((project: Project) => (
-                      <ProjectCard key={project.id} project={project} compact />
-                    ))}
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          ) : (
-            <EmptyState
-              title="No developer submissions yet"
-              description="Encourage developers to import their GitHub repositories to review them here."
-            />
-          )}
-        </TabsContent>
-      </Tabs>
+                )
+              ) : (
+                <div className="flex min-h-[420px] flex-col items-center justify-center gap-4 p-8 text-center">
+                  <p className="text-sm text-muted-foreground">
+                    We could not retrieve your repositories. Make sure GitHub access is granted.
+                  </p>
+                  <Button
+                    onClick={async () => {
+                      try {
+                        const response = await fetch("/api/auth/login");
+                        const data = await response.json();
+                        if (data.success && data.data.auth_url) {
+                          window.location.href = data.data.auth_url;
+                        }
+                      } catch {
+                        toast.error("Failed to initiate GitHub authorization");
+                      }
+                    }}
+                  >
+                    Grant GitHub Access
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </section>
     </div>
   );
 }
 
-function ProjectCard({ project, compact = false }: { project: Project; compact?: boolean }) {
+function ProjectCard({
+  project,
+  compact = false,
+  profile = null,
+}: {
+  project: Project;
+  compact?: boolean;
+  profile?: Profile | null;
+}) {
   return (
     <div
       className={cn(
-        "rounded-lg border border-border bg-background p-4 transition hover:shadow-sm",
-        compact && "p-3"
+        "rounded-2xl border border-border/60 bg-background/95 shadow-md",
+        compact && "bg-muted/40"
       )}
     >
-      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-        <div className="space-y-1">
-          <div className="flex items-center gap-3">
-            <p className="text-base font-semibold">{project.name}</p>
-            {project.language && <Badge variant="outline">{project.language}</Badge>}
+      <div className={cn("flex flex-col gap-4", compact ? "p-4" : "p-6")}>
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-3">
+              <p className="text-base font-semibold">{project.name}</p>
+              {project.language && <Badge variant="outline">{project.language}</Badge>}
+            </div>
+            {project.description && (
+              <p className="text-sm text-muted-foreground line-clamp-2">
+                {project.description}
+              </p>
+            )}
+            <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1">
+                <Star className="h-3.5 w-3.5" aria-hidden />
+                {project.stars ?? 0}
+              </span>
+              <span className="flex items-center gap-1">
+                <GitFork className="h-3.5 w-3.5" aria-hidden />
+                {project.forks ?? 0}
+              </span>
+              <span className="flex items-center gap-1">
+                <Eye className="h-3.5 w-3.5" aria-hidden />
+                {project.watchers ?? 0}
+              </span>
+            </div>
           </div>
-          {project.description && (
-            <p className="text-sm text-muted-foreground line-clamp-2">
-              {project.description}
-            </p>
-          )}
-          <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-            <span>⭐ {project.stars ?? 0}</span>
-            <span>🍴 {project.forks ?? 0}</span>
-            <span>👀 {project.watchers ?? 0}</span>
+          <div className="flex flex-shrink-0 items-center gap-2">
+            <ProjectDocumentationSheet project={project} profile={profile} compact={compact} />
+            {project.html_url && (
+              <Button asChild variant="ghost" size="sm">
+                <a href={project.html_url} target="_blank" rel="noreferrer">
+                  View on GitHub
+                </a>
+              </Button>
+            )}
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          {project.html_url && (
-            <Button asChild variant="ghost" size="sm">
-              <a href={project.html_url} target="_blank" rel="noreferrer">
-                View on GitHub
-              </a>
-            </Button>
-          )}
-          <Button asChild size="sm" variant="secondary">
-            <Link href={`/projects/${project.id}`}>Open</Link>
-          </Button>
-        </div>
-      </div>
-      <div className="mt-3 text-xs text-muted-foreground">
-        <p>
+        <div className="text-xs text-muted-foreground">
           Last synced: {project.last_synced_at ? new Date(project.last_synced_at).toLocaleString() : "--"}
-        </p>
+        </div>
       </div>
     </div>
   );
@@ -409,9 +630,40 @@ function ProjectCard({ project, compact = false }: { project: Project; compact?:
 
 function EmptyState({ title, description }: { title: string; description?: string }) {
   return (
-    <div className="rounded-lg border border-dashed border-border bg-muted/30 p-8 text-center">
+    <div className="flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border bg-muted/40 p-10 text-center shadow-sm">
       <p className="text-base font-semibold">{title}</p>
-      {description && <p className="mt-1 text-sm text-muted-foreground">{description}</p>}
+      {description && <p className="text-sm text-muted-foreground">{description}</p>}
+    </div>
+  );
+}
+
+interface StatTileProps {
+  title: string;
+  description?: string;
+  value: string;
+  icon?: ComponentType<{ className?: string }>;
+  loading?: boolean;
+}
+
+function StatTile({ title, description, value, icon: Icon, loading }: StatTileProps) {
+  return (
+    <div className="rounded-2xl border border-border/60 bg-background/80 p-5">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground/80">{title}</p>
+          {description && (
+            <p className="mt-1 text-sm text-muted-foreground/80">{description}</p>
+          )}
+        </div>
+        {Icon && <Icon className="h-5 w-5 text-muted-foreground/70" />}
+      </div>
+      <div className="mt-4">
+        {loading ? (
+          <Skeleton className="h-8 w-16" />
+        ) : (
+          <p className="text-2xl font-semibold text-foreground">{value}</p>
+        )}
+      </div>
     </div>
   );
 }

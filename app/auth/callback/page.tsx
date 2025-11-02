@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 
 export default function AuthCallbackPage() {
@@ -101,9 +102,9 @@ export default function AuthCallbackPage() {
         <div className="max-w-md text-center">
           <h1 className="mb-2 text-2xl font-bold">Authentication Error</h1>
           <p className="mb-4 text-muted-foreground">{errorMessage}</p>
-          <a href="/" className="text-primary hover:underline">
+          <Link href="/" className="text-primary hover:underline">
             Return to home
-          </a>
+          </Link>
         </div>
       </div>
     );

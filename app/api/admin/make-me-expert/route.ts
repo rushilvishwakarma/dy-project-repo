@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { adminClient } from "@/lib/supabase/admin";
 import { assertSupabaseUser } from "@/lib/auth";
 
-export async function POST(request: Request) {
+export async function POST() {
   try {
     // get the currently authenticated user from the Authorization header
     const user = await assertSupabaseUser();
